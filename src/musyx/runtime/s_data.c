@@ -8,6 +8,10 @@
 #if MUSY_TARGET == MUSY_TARGET_PC
 #include "hw_pc_assets.h"
 #include "musyx/sal.h"
+#if MUSY_TARGET == MUSY_TARGET_PC
+#include "musyx/dspvoice.h"
+#include "musyx/voice.h"
+#endif
 #include <string.h>
 #endif
 
@@ -474,6 +478,121 @@ failed:
   return false;
 }
 
+#if MUSY_TARGET == MUSY_TARGET_PC
+/* Playing voices copy their sample's ADPCM info pointer, which points into the directory. */
+static void pcKillVoicesUsingDirectory(const MusyPCGroupData* assets) {
+  const u8* begin = (const u8*)assets->directory;
+  const u8* end = begin + assets->directoryBytes;
+  for (u32 i = 0; i < synthInfo.voiceNum; ++i) {
+    const u8* extra = hwIsActive(i) ? (const u8*)dspVoice[i].smp_info.extraData : NULL;
+    if (extra >= begin && extra < end)
+      voiceKill(i);
+  }
+}
+
+/* Removes stack entry `index` (the caller holds the IRQ lock). Shared IDs belong to the group
+ * that registered them first; when that is this group and a later one still uses them, the
+ * table entries and sample registrations move to that group's copies before this one's
+ * memory is freed. For the top entry (sndPopGroup) nothing is ever shared upwards. */
+static void pcRemoveGroupAt(s16 index) {
+  GROUP_DATA* group = GS_CURRENT[index].gAddr;
+  PCGroup* owned = &pcGroups[index];
+  if (group->type == 1) {
+    FX_DATA* fx = (FX_DATA*)((u8*)owned->assets.project + group->data.fx.tableOff);
+    s3dKillEmitterByFXID(fx->fx, fx->num);
+  } else {
+    seqKillInstancesByGroupID(group->id);
+  }
+  synthKillVoicesByMacroReferences((u16*)((u8*)owned->assets.project + group->macroOff));
+  for (size_t i = owned->count; i; --i)
+    pcRemoveRecord(&owned->records[i - 1]);
+  for (size_t i = 0; i < owned->count; ++i) {
+    const PCRegistration* record = &owned->records[i];
+    void* current = NULL;
+    u16 num = 0;
+    switch (record->type) {
+    case 0:
+      current = dataGetMacro(record->id);
+      break;
+    case 2:
+      current = dataGetKeymap(record->id);
+      break;
+    case 3:
+      current = dataGetLayer(record->id, &num);
+      break;
+    case 4:
+      current = dataGetCurve(record->id);
+      break;
+    default:
+      continue;
+    }
+    if (!record->payload || current != record->payload)
+      continue;
+    for (s16 g = 0; g < SP_CURRENT; ++g) {
+      const PCGroup* other = &pcGroups[g];
+      if (g == index)
+        continue;
+      size_t j = 0;
+      while (j < other->count &&
+             (other->records[j].type != record->type || other->records[j].id != record->id ||
+              !other->records[j].payload))
+        ++j;
+      if (j < other->count) {
+        const PCRegistration* source = &other->records[j];
+        dataPCRetarget(record->type, record->id, record->payload, source->payload, source->count,
+                       source->size);
+        break;
+      }
+    }
+  }
+  pcKillVoicesUsingDirectory(&owned->assets);
+  for (SDIR_DATA* entry = owned->assets.directory; entry->id != 0xffff; ++entry) {
+    if (entry->ref_cnt)
+      salPCTransferSample(entry);
+  }
+  dataRemoveSDir(owned->assets.directory);
+  if (group->type == 1)
+    RemoveFXTab(group->id);
+  salFree(owned->records);
+  salPCFreeGroupData(&owned->assets);
+  salPCCollectSongs();
+  const s16 above = SP_CURRENT - index - 1;
+  memmove(&GS_CURRENT[index], &GS_CURRENT[index + 1], above * sizeof(GS_CURRENT[0]));
+  memmove(&pcGroups[index], &pcGroups[index + 1], above * sizeof(pcGroups[0]));
+  --SP_CURRENT;
+  memset(&pcGroups[SP_CURRENT], 0, sizeof(pcGroups[0]));
+  memset(&GS_CURRENT[SP_CURRENT], 0, sizeof(GS_CURRENT[SP_CURRENT]));
+}
+
+bool sndPopGroup(void) {
+  if (!sndActive)
+    return false;
+  hwDisableIrq();
+  if (!SP_CURRENT) {
+    hwEnableIrq();
+    return false;
+  }
+  pcRemoveGroupAt(SP_CURRENT - 1);
+  hwEnableIrq();
+  return true;
+}
+
+bool sndPCRemoveGroup(u16 gid) {
+  if (!sndActive)
+    return false;
+  hwDisableIrq();
+  s16 index = SP_CURRENT;
+  while (index > 0 && GS_CURRENT[index - 1].gAddr->id != gid)
+    --index;
+  if (index == 0) {
+    hwEnableIrq();
+    return false;
+  }
+  pcRemoveGroupAt(index - 1);
+  hwEnableIrq();
+  return true;
+}
+#else
 bool sndPopGroup(void) {
   if (!sndActive)
     return false;
@@ -504,6 +623,7 @@ bool sndPopGroup(void) {
   hwEnableIrq();
   return true;
 }
+#endif
 #else
 bool sndPushGroup(void* prj_data, u16 gid, void* samples, void* sdir, void* pool) {
   GROUP_DATA* g; // r31
