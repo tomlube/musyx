@@ -65,6 +65,14 @@ typedef struct SND_PC_ASSET_ERROR {
   const char* reason;
 } SND_PC_ASSET_ERROR;
 
+#if MUSY_TARGET == MUSY_TARGET_PC
+/* Removes a pushed group from anywhere in the group stack (sndPopGroup only removes the
+ * top). IDs it shares with groups that stay are handed over to them, so their sounds keep
+ * working; voices running the removed group's macros are stopped. Returns false if no
+ * group with that ID is on the stack. */
+bool sndPCRemoveGroup(SND_GROUPID gid);
+#endif
+
 /* Bounded validation of raw GC sections. Immutable, alignment-independent and
  * usable without sndInit or an output device. This checks file structure;
  * references to groups already on the stack are resolved when pushing. */

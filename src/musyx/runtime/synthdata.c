@@ -737,6 +737,55 @@ void *dataGetLayer(u16 cid, u16 *n) {
   return NULL;
 }
 
+#if MUSY_TARGET == MUSY_TARGET_PC
+/* A shared ID keeps the payload of the group that registered it first. When that group is
+ * removed while others still reference the ID, point the entry at a surviving group's copy.
+ * Types follow sndPushGroup's registrations: 0 macro, 2 keymap, 3 layer, 4 curve. */
+bool dataPCRetarget(u8 type, u16 id, const void *oldData, void *newData, u16 num, u32 size) {
+  DATA_TAB dkey = {.id = id};
+  switch (type) {
+  case 0: {
+    const s32 main = id >> 6;
+    MAC_SUBTAB key = {.id = id};
+    MAC_SUBTAB *entry;
+    if (id >= 0x8000 || dataMacMainTab[main].num == 0)
+      return false;
+    entry = sndBSearch(&key, &dataMacSubTabmem[dataMacMainTab[main].subTabIndex],
+                       dataMacMainTab[main].num, sizeof(MAC_SUBTAB), maccmp);
+    if (!entry || entry->data != oldData)
+      return false;
+    entry->data = newData;
+    return true;
+  }
+  case 2: {
+    DATA_TAB *entry = sndBSearch(&dkey, dataKeymapTab, dataKeymapNum, sizeof(DATA_TAB), curvecmp);
+    if (!entry || entry->data != oldData)
+      return false;
+    entry->data = newData;
+    return true;
+  }
+  case 3: {
+    LAYER_TAB lkey = {.id = id};
+    LAYER_TAB *entry = sndBSearch(&lkey, dataLayerTab, dataLayerNum, sizeof(LAYER_TAB), layercmp);
+    if (!entry || entry->data != oldData)
+      return false;
+    entry->data = newData;
+    entry->num = num;
+    return true;
+  }
+  case 4: {
+    DATA_TAB *entry = sndBSearch(&dkey, dataCurveTab, dataCurveNum, sizeof(DATA_TAB), curvecmp);
+    if (!entry || entry->data != oldData)
+      return false;
+    entry->data = newData;
+    entry->size = size;
+    return true;
+  }
+  }
+  return false;
+}
+#endif
+
 static s32 fxcmp(void *p1, void *p2) { return ((FX_TAB *)p1)->id - ((FX_TAB *)p2)->id; }
 
 struct FX_TAB *dataGetFX(u16 fid) {

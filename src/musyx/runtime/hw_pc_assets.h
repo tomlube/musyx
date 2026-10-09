@@ -43,5 +43,9 @@ void salPCCollectSongs(void);
 void salPCResetSampleData(void);
 void salPCFinishSampleUpload(void);
 bool salPCRegistrationSpace(u32 macros, u32 curves, u32 keymaps, u32 layers);
+#if MUSY_TARGET == MUSY_TARGET_PC
+bool salPCTransferSample(SDIR_DATA* entry);
+bool dataPCRetarget(u8 type, u16 id, const void* oldData, void* newData, u16 num, u32 size);
+#endif
 
 #endif

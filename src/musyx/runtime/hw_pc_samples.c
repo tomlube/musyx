@@ -81,6 +81,28 @@ bool dataRemoveSDir(SDIR_DATA *sdir) {
   return false;
 }
 
+#if MUSY_TARGET == MUSY_TARGET_PC
+/* Hands a referenced entry to another directory holding the same sample, so the entry's
+ * directory can be removed while later groups still play it. The uploaded copy moves as is. */
+bool salPCTransferSample(SDIR_DATA *entry) {
+  for (u16 i = 0; i < directoryCount; ++i) {
+    SDIR_DATA *other = findSample(&directories[i], entry->id);
+    if (other && other != entry && !other->ref_cnt) {
+      other->addr = entry->addr;
+      other->ref_cnt = entry->ref_cnt;
+      entry->addr = NULL;
+      entry->ref_cnt = 0;
+      return true;
+    }
+  }
+  /* Nobody else carries it: release the upload rather than keep a dangling entry. */
+  hwRemoveSample(&entry->header, entry->addr);
+  entry->addr = NULL;
+  entry->ref_cnt = 0;
+  return false;
+}
+#endif
+
 bool dataAddSampleReference(u16 id) {
   SDIR_DATA *entry = activeSample(id, NULL);
   if (entry) {
